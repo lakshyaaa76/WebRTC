@@ -33,39 +33,45 @@ export default function Home() {
     <main className="flex h-screen w-screen">
       <TerminalWindow title="p2p-transfer — zsh">
         <p className="mb-6 text-term-dim">
-          $ direct, encrypted, browser-to-browser file transfer.
-          <br />$ no file ever touches a server.
+          <span className="text-term-action">{">"}</span> direct, encrypted, browser-to-browser file transfer.
+          <br /><span className="text-term-action">{">"}</span> no file ever touches a server.
         </p>
 
-        <div className="mb-8">
-          <p className="mb-2 text-term-cyan">$ create-room</p>
+        <div className="mb-10">
+          <p className="mb-3 text-term-action font-bold text-shadow-glow"># Initialize new session</p>
           <button
             onClick={handleCreateRoom}
             disabled={creating}
-            className="rounded border border-term-cyan px-4 py-2 text-term-cyan transition hover:bg-term-cyan hover:text-term-bg disabled:opacity-50"
+            className="group relative rounded border border-term-action bg-term-bg px-6 py-3 text-term-action transition-all duration-300 hover:box-shadow-glow disabled:opacity-50"
           >
-            {creating ? "creating..." : "Create Room"}
+            <div className="flex items-center gap-2">
+              <span>{creating ? "[creating...]" : "./create_room.sh"}</span>
+              {!creating && <span className="w-2 h-4 bg-term-action opacity-0 group-hover:opacity-100 animate-blink inline-block" />}
+            </div>
           </button>
         </div>
 
         <div>
-          <p className="mb-2 text-term-magenta">$ join-room --code</p>
-          <form onSubmit={handleJoinRoom} className="flex flex-wrap gap-2">
-            <input
-              value={joinCode}
-              onChange={(event) => setJoinCode(event.target.value)}
-              placeholder="ABC123"
-              maxLength={6}
-              className="w-32 rounded border border-term-border bg-term-bg px-3 py-2 uppercase tracking-widest text-term-fg placeholder-term-dim outline-none focus:border-term-magenta"
-            />
+          <p className="mb-3 text-term-magenta font-bold text-shadow-glow"># Join existing session</p>
+          <form onSubmit={handleJoinRoom} className="flex flex-col sm:flex-row gap-3">
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-term-magenta">{">"}</span>
+              <input
+                value={joinCode}
+                onChange={(event) => setJoinCode(event.target.value)}
+                placeholder="CODE"
+                maxLength={6}
+                className="w-40 rounded border border-term-border bg-term-bg pl-8 pr-3 py-3 uppercase tracking-widest text-term-fg placeholder-term-dim outline-none transition-all focus:border-term-magenta focus:box-shadow-glow"
+              />
+            </div>
             <button
               type="submit"
-              className="rounded border border-term-magenta px-4 py-2 text-term-magenta transition hover:bg-term-magenta hover:text-term-bg"
+              className="rounded border border-term-magenta px-6 py-3 text-term-magenta transition-all duration-300 hover:bg-term-magenta hover:text-term-bg hover:box-shadow-glow"
             >
-              Join Room
+              Execute
             </button>
           </form>
-          {joinError && <p className="mt-2 text-sm text-[#F7768E]">{joinError}</p>}
+          {joinError && <p className="mt-3 text-sm text-term-error text-shadow-glow animate-fade-in">{joinError}</p>}
         </div>
       </TerminalWindow>
     </main>

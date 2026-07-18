@@ -1,3 +1,57 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root, [data-theme="cyan"] {
+    --bg: #1A1B26;
+    --panel: #1F2335;
+    --border: #2A2E42;
+    --fg: #C8CCE0;
+    --dim: #6B7089;
+    --system: #9ECE6A;
+    --waiting: #E0AF68;
+    --error: #F7768E;
+    --action: #7AA2F7;
+    --magenta: #BB9AF7;
+    --glow-color: rgba(122, 162, 247, 0.4);
+  }
+
+  [data-theme="green"] {
+    --bg: #050505;
+    --panel: #0a110a;
+    --border: #113311;
+    --fg: #33ff33;
+    --dim: #118811;
+    --system: #33ff33;
+    --waiting: #ffff33;
+    --error: #ff3333;
+    --action: #33ff33;
+    --magenta: #55ff55;
+    --glow-color: rgba(51, 255, 51, 0.4);
+  }
+
+  [data-theme="amber"] {
+    --bg: #050300;
+    --panel: #140a00;
+    --border: #4d2b00;
+    --fg: #ffb000;
+    --dim: #996600;
+    --system: #ffb000;
+    --waiting: #ffff00;
+    --error: #ff3300;
+    --action: #ffb000;
+    --magenta: #ff8800;
+    --glow-color: rgba(255, 176, 0, 0.4);
+  }
+}
+
+@layer utilities {
+  .text-shadow-glow {
+    text-shadow: 0 0 8px var(--glow-color), 0 0 16px var(--glow-color);
+  }
+  
+  .box-shadow-glow {
+    box-shadow: 0 0 8px var(--glow-color), inset 0 0 8px var(--glow-color);
+  }
+}

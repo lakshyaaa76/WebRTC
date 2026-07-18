@@ -7,15 +7,18 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Tokyo Night terminal palette.
+        // Terminal dynamic themes powered by CSS variables
         term: {
-          bg: "#1A1B26",
-          panel: "#1F2335",
-          border: "#2A2E42",
-          fg: "#C8CCE0",
-          dim: "#6B7089",
-          cyan: "#7AA2F7",
-          magenta: "#BB9AF7",
+          bg: "var(--bg)",
+          panel: "var(--panel)",
+          border: "var(--border)",
+          fg: "var(--fg)",
+          dim: "var(--dim)",
+          system: "var(--system)",
+          waiting: "var(--waiting)",
+          error: "var(--error)",
+          action: "var(--action)",
+          magenta: "var(--magenta)",
         },
       },
       fontFamily: {

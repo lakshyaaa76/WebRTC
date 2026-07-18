@@ -19,10 +19,17 @@ const ICE_SERVERS: RTCIceServer[] = [
 
 export type PeerRole = "initiator" | "joiner";
 
+export interface ConnectionStats {
+  rttMs: number | null;
+  connectionType: string | null;
+  bytesPerSec: number | null;
+}
+
 export interface WebRTCConnectionCallbacks {
   onDataChannelOpen?: (channel: RTCDataChannel) => void;
   onDataChannelMessage?: (event: MessageEvent) => void;
   onConnectionStateChange?: (state: RTCPeerConnectionState) => void;
+  onStatsUpdate?: (stats: ConnectionStats) => void;
 }
 
 export class WebRTCConnection {
@@ -31,6 +38,10 @@ export class WebRTCConnection {
   private roomId: string;
   private role: PeerRole;
   private dataChannel: RTCDataChannel | null = null;
+  private statsInterval: ReturnType<typeof setInterval> | null = null;
+  private lastBytesReceived = 0;
+  private lastBytesSent = 0;
+  private lastStatsTime = 0;
 
   // ICE candidates can arrive before the offer/answer round-trip has finished
   // (they're gathered and trickled in asynchronously). Applying a candidate
@@ -95,13 +106,76 @@ export class WebRTCConnection {
     channel.onopen = () => {
       console.log("[webrtc] data channel open");
       this.callbacks.onDataChannelOpen?.(channel);
+      this.startStatsPolling();
     };
     channel.onmessage = (event) => {
       this.callbacks.onDataChannelMessage?.(event);
     };
     channel.onclose = () => {
       console.log("[webrtc] data channel closed");
+      this.stopStatsPolling();
     };
+  }
+
+  // Phase 5a: poll RTCPeerConnection.getStats() every second to surface RTT,
+  // connection type (host/srflx/relay), and live throughput to the UI overlay.
+  private startStatsPolling() {
+    this.lastStatsTime = performance.now();
+    this.statsInterval = setInterval(() => {
+      void this.collectStats();
+    }, 1000);
+  }
+
+  private stopStatsPolling() {
+    if (this.statsInterval !== null) {
+      clearInterval(this.statsInterval);
+      this.statsInterval = null;
+    }
+  }
+
+  private async collectStats() {
+    const stats = await this.pc.getStats();
+    let rttMs: number | null = null;
+    let connectionType: string | null = null;
+    let totalBytesReceived = 0;
+    let totalBytesSent = 0;
+
+    stats.forEach((report) => {
+      if (report.type === "candidate-pair" && report.state === "succeeded") {
+        // currentRoundTripTime is in seconds; convert to ms
+        if (typeof report.currentRoundTripTime === "number") {
+          rttMs = Math.round(report.currentRoundTripTime * 1000);
+        }
+        // totalBytesSent/Received on the candidate pair gives transfer throughput
+        if (typeof report.bytesReceived === "number") totalBytesReceived += report.bytesReceived;
+        if (typeof report.bytesSent === "number") totalBytesSent += report.bytesSent;
+      }
+      if (report.type === "local-candidate" && report.id) {
+        // Match the local candidate of the selected pair to find the type
+        stats.forEach((r) => {
+          if (
+            r.type === "candidate-pair" &&
+            r.state === "succeeded" &&
+            r.localCandidateId === report.id
+          ) {
+            connectionType = report.candidateType ?? null; // "host", "srflx", or "relay"
+          }
+        });
+      }
+    });
+
+    const now = performance.now();
+    const deltaMs = now - this.lastStatsTime;
+    const deltaBytes =
+      (totalBytesReceived - this.lastBytesReceived) +
+      (totalBytesSent - this.lastBytesSent);
+    const bytesPerSec = deltaMs > 0 ? Math.round((deltaBytes / deltaMs) * 1000) : 0;
+
+    this.lastBytesReceived = totalBytesReceived;
+    this.lastBytesSent = totalBytesSent;
+    this.lastStatsTime = now;
+
+    this.callbacks.onStatsUpdate?.({ rttMs, connectionType, bytesPerSec });
   }
 
   private async handleSignalingMessage(message: ServerMessage) {
@@ -173,6 +247,7 @@ export class WebRTCConnection {
   }
 
   close() {
+    this.stopStatsPolling();
     this.dataChannel?.close();
     this.pc.close();
   }

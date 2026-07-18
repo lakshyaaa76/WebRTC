@@ -228,7 +228,7 @@ and transfer a file using only the UI — no devtools needed.
 
 ---
 
-## Phase 5 — Polish (stats overlay, multi-file, drag-and-drop, mobile layout)
+## Phase 5 — Polish (stats overlay, multi-file, drag-and-drop, mobile layout) — **Status: Completed**
 
 **Goal:** Round out the remaining features from the brief's build order.
 
