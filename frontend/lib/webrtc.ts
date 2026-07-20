@@ -12,8 +12,8 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   {
     urls: "turn:openrelay.metered.ca:80",
-    username: "REPLACE_WITH_OPEN_RELAY_USERNAME",
-    credential: "REPLACE_WITH_OPEN_RELAY_CREDENTIAL",
+    username: process.env.NEXT_PUBLIC_TURN_USERNAME || "REPLACE_WITH_OPEN_RELAY_USERNAME",
+    credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL || "REPLACE_WITH_OPEN_RELAY_CREDENTIAL",
   },
 ];
 
