@@ -2,6 +2,10 @@
 
 A simple WebRTC-based peer-to-peer file sharing application. The app uses a lightweight signaling server to help peers connect and exchange files directly between browsers.
 
+## Live demo
+
+The app is currently deployed at https://web-rtc-ivory.vercel.app/
+
 ## What this project does
 
 - Upload and share files between users in the same room
