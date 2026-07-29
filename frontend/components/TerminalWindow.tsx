@@ -21,18 +21,21 @@ const ASCII_BANNER = `
 
 export default function TerminalWindow({ title, children }: TerminalWindowProps) {
   const [theme, setTheme] = useState<Theme>("cyan");
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("term-theme") as Theme;
     if (saved && THEMES.includes(saved)) {
       setTheme(saved);
     }
+    setMounted(true);
   }, []);
 
   useEffect(() => {
+    if (!mounted) return;
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("term-theme", theme);
-  }, [theme]);
+  }, [theme, mounted]);
 
   const cycleTheme = () => {
     const nextIndex = (THEMES.indexOf(theme) + 1) % THEMES.length;

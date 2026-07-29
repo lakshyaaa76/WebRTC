@@ -218,10 +218,19 @@ export default function Room() {
     <main className="flex h-screen w-screen">
       <TerminalWindow title={roomId ? `room ${roomId} — zsh` : "connecting — zsh"}>
         
-        {role === "initiator" && roomId && (
+        {roomId && (
+          <button
+            onClick={() => router.push('/')}
+            className="absolute top-4 right-4 text-xs text-term-dim hover:text-term-error transition-colors font-mono"
+          >
+            [ LEAVE_ROOM ]
+          </button>
+        )}
+
+        {roomId && (
           <div className="mb-8 p-4 border border-term-action rounded bg-term-bg box-shadow-glow flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 animate-fade-in group">
             <div>
-              <p className="text-term-dim text-xs mb-1 font-mono">SESSION ACTIVE. SHARE CODE TO INITIATE TRANSFER:</p>
+              <p className="text-term-dim text-xs mb-1 font-mono">SESSION ACTIVE. ROOM CODE:</p>
               <p className="text-term-action font-bold text-shadow-glow text-lg font-mono">{roomId}</p>
             </div>
             <button
