@@ -130,16 +130,18 @@ export default function Room() {
           addLog('system', 'waiting', `$ room ${message.roomId} ready — waiting for peer`);
           router.replace(`/room/${message.roomId}`, undefined, { shallow: true });
 
-          connectionRef.current = new WebRTCConnection(
-            signaling,
-            message.roomId,
-            "initiator",
-            {
-              onDataChannelOpen: setupChannel,
-              onConnectionStateChange: (state) => addLog('connection', 'system', `$ connection: ${state}`),
-              onStatsUpdate: (s) => setStats(s),
-            }
-          );
+          (async () => {
+            connectionRef.current = await WebRTCConnection.create(
+              signaling,
+              message.roomId,
+              "initiator",
+              {
+                onDataChannelOpen: setupChannel,
+                onConnectionStateChange: (state) => addLog('connection', 'system', `$ connection: ${state}`),
+                onStatsUpdate: (s) => setStats(s),
+              }
+            );
+          })();
           break;
         case "peer-joined":
           addLog('connection', 'system', "$ peer joined — negotiating connection...");
@@ -164,11 +166,13 @@ export default function Room() {
       setRole("joiner");
       addLog('system', 'waiting', `$ joining room ${initialId}...`);
       signaling.joinRoom(initialId);
-      connectionRef.current = new WebRTCConnection(signaling, initialId, "joiner", {
-        onDataChannelOpen: setupChannel,
-        onConnectionStateChange: (state) => addLog('connection', 'system', `$ connection: ${state}`),
-        onStatsUpdate: (s) => setStats(s),
-      });
+      (async () => {
+        connectionRef.current = await WebRTCConnection.create(signaling, initialId, "joiner", {
+          onDataChannelOpen: setupChannel,
+          onConnectionStateChange: (state) => addLog('connection', 'system', `$ connection: ${state}`),
+          onStatsUpdate: (s) => setStats(s),
+        });
+      })();
     }
 
     return () => {

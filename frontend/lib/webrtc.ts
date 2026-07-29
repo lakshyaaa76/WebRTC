@@ -8,14 +8,7 @@ import { SignalingClient, ServerMessage } from "./signaling";
 // requires signing up for a free account and fetching short-lived credentials
 // via their API -- these are placeholders until that account exists. Direct
 // P2P (host candidates) works fine on localhost without TURN at all.
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: "stun:stun.l.google.com:19302" },
-  {
-    urls: "turn:openrelay.metered.ca:80",
-    username: process.env.NEXT_PUBLIC_TURN_USERNAME || "REPLACE_WITH_OPEN_RELAY_USERNAME",
-    credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL || "REPLACE_WITH_OPEN_RELAY_CREDENTIAL",
-  },
-];
+// ICE Servers are now fetched dynamically via the secure /api/turn endpoint.
 
 export type PeerRole = "initiator" | "joiner";
 
@@ -52,18 +45,42 @@ export class WebRTCConnection {
 
   private callbacks: WebRTCConnectionCallbacks;
 
-  constructor(
+  static async create(
     signaling: SignalingClient,
     roomId: string,
     role: PeerRole,
     callbacks: WebRTCConnectionCallbacks = {}
+  ): Promise<WebRTCConnection> {
+    let iceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+    try {
+      const res = await fetch('/api/turn');
+      const { username, credential } = await res.json();
+      if (username && credential) {
+        iceServers.push({
+          urls: "turn:openrelay.metered.ca:80",
+          username,
+          credential,
+        });
+      }
+    } catch (e) {
+      console.error("[webrtc] Failed to fetch TURN credentials", e);
+    }
+    return new WebRTCConnection(signaling, roomId, role, callbacks, iceServers);
+  }
+
+  private constructor(
+    signaling: SignalingClient,
+    roomId: string,
+    role: PeerRole,
+    callbacks: WebRTCConnectionCallbacks = {},
+    iceServers: RTCIceServer[]
   ) {
     this.signaling = signaling;
     this.roomId = roomId;
     this.role = role;
     this.callbacks = callbacks;
 
-    this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    this.pc = new RTCPeerConnection({ iceServers });
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
