@@ -176,7 +176,12 @@ export default function Room() {
     }
 
     return () => {
-      initializedRef.current = false;
+      // NOTE: Do NOT reset initializedRef.current here.
+      // Resetting it caused React Strict Mode's intentional remount to re-run
+      // the entire initialization, creating a second WebSocket + room code.
+      // The ref is intentionally left true so any remount is a no-op.
+      // On genuine navigation away, the component unmounts entirely and a fresh
+      // instance starts with initializedRef.current = false from useRef(false).
       connectionRef.current?.close();
       signaling.close();
     };

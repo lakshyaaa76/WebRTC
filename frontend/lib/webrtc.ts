@@ -51,19 +51,31 @@ export class WebRTCConnection {
     role: PeerRole,
     callbacks: WebRTCConnectionCallbacks = {}
   ): Promise<WebRTCConnection> {
-    let iceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+    // Start with multiple STUN servers for redundancy.
+    let iceServers: RTCIceServer[] = [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+    ];
     try {
       const res = await fetch('/api/turn');
-      const { username, credential } = await res.json();
-      if (username && credential) {
-        iceServers.push({
-          urls: "turn:openrelay.metered.ca:80",
-          username,
-          credential,
-        });
+      if (res.ok) {
+        const { username, credential } = await res.json();
+        if (username && credential) {
+          // Add all four openrelay.metered.ca endpoints so if one port is
+          // blocked by a firewall or the credential is expired on one, the
+          // browser automatically tries the next candidate.
+          iceServers.push(
+            { urls: "turn:openrelay.metered.ca:80",   username, credential },
+            { urls: "turn:openrelay.metered.ca:80?transport=tcp", username, credential },
+            { urls: "turn:openrelay.metered.ca:443",  username, credential },
+            { urls: "turn:openrelay.metered.ca:443?transport=tcp", username, credential },
+            { urls: "turn:openrelay.metered.ca:3478", username, credential },
+          );
+        }
       }
     } catch (e) {
-      console.error("[webrtc] Failed to fetch TURN credentials", e);
+      console.error("[webrtc] Failed to fetch TURN credentials — proceeding with STUN only", e);
     }
     return new WebRTCConnection(signaling, roomId, role, callbacks, iceServers);
   }

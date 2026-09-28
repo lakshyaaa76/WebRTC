@@ -26,7 +26,10 @@
 const { WebSocketServer } = require("ws");
 
 const PORT = 8000;
-const wss = new WebSocketServer({ port: PORT });
+// Bind to all interfaces (0.0.0.0) so devices on the same LAN can reach this
+// server via the laptop's IP address (e.g. ws://192.168.1.7:8000), not just
+// via localhost. Without this, mobile connections would be refused.
+const wss = new WebSocketServer({ port: PORT, host: "0.0.0.0" });
 
 // In-memory, ephemeral room table: roomId -> array of up to 2 sockets.
 // This is intentionally not persisted anywhere — rooms disappear the moment

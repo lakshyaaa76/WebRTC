@@ -16,11 +16,25 @@ export type ServerMessage =
 
 type MessageHandler = (message: ServerMessage) => void;
 
-// Defaults to the local signaling server. In later phases (deployment), this
-// should be overridden via an environment variable pointing at the deployed
-// wss:// URL instead of ws://localhost:8000.
-const SIGNALING_URL =
-  process.env.NEXT_PUBLIC_SIGNALING_URL || "ws://localhost:8000";
+// Derive the signaling server URL from the current page's hostname so that
+// cross-device connections (e.g. a phone accessing the laptop via LAN IP) work
+// automatically -- ws://192.168.1.7:8000 instead of ws://localhost:8000.
+// An explicit NEXT_PUBLIC_SIGNALING_URL env var takes priority (used in
+// production deployments pointing at a deployed wss:// server).
+function getSignalingUrl(): string {
+  if (process.env.NEXT_PUBLIC_SIGNALING_URL) {
+    return process.env.NEXT_PUBLIC_SIGNALING_URL;
+  }
+  if (typeof window !== "undefined") {
+    // Use the same hostname the browser used to reach the Next.js app,
+    // but always talk to port 8000 (the signaling server).
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.hostname}:8000`;
+  }
+  return "ws://localhost:8000"; // SSR fallback (never actually used for WS)
+}
+
+const SIGNALING_URL = getSignalingUrl();
 
 export class SignalingClient {
   private socket: WebSocket;
