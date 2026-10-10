@@ -6,7 +6,10 @@
 
 export type ServerMessage =
   | { type: "room-created"; roomId: string }
-  | { type: "peer-joined" }
+  // shouldInitiate: server decides who creates the offer — the peer that was
+  // already waiting in the room (true) vs. the one who just joined (false).
+  // This ensures correct role assignment even when the original creator rejoins.
+  | { type: "peer-joined"; shouldInitiate: boolean }
   | { type: "room-full" }
   | { type: "offer"; sdp: RTCSessionDescriptionInit }
   | { type: "answer"; sdp: RTCSessionDescriptionInit }
@@ -61,6 +64,12 @@ export class SignalingClient {
     this.handlers.push(handler);
   }
 
+  // Remove a previously registered handler. Used by WebRTCConnection.close()
+  // so stale handlers don't accumulate across reconnections.
+  offMessage(handler: MessageHandler) {
+    this.handlers = this.handlers.filter((h) => h !== handler);
+  }
+
   private waitForOpen(): Promise<void> {
     if (this.socket.readyState === WebSocket.OPEN) return Promise.resolve();
     return new Promise((resolve) => {
@@ -95,6 +104,15 @@ export class SignalingClient {
 
   leaveRoom(roomId: string) {
     return this.send({ type: "leave-room", roomId });
+  }
+
+  // Synchronous variant of leaveRoom — sends immediately if the socket is open
+  // without waiting for the open handshake. Safe to call in beforeunload handlers
+  // and cleanup functions where async/await cannot be awaited reliably.
+  leaveRoomSync(roomId: string) {
+    if (this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({ type: "leave-room", roomId }));
+    }
   }
 
   close() {

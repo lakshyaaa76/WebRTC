@@ -4,12 +4,8 @@
 
 import { SignalingClient, ServerMessage } from "./signaling";
 
-// STUN is free and requires no credentials. TURN (Open Relay, via Metered.ca)
-// requires signing up for a free account and fetching short-lived credentials
-// via their API -- these are placeholders until that account exists. Direct
-// P2P (host candidates) works fine on localhost without TURN at all.
-// ICE Servers are now fetched dynamically via the secure /api/turn endpoint.
-
+// Kept for UI state typing in [id].tsx — no longer used internally to drive
+// offer creation (that is now determined by the server-side shouldInitiate flag).
 export type PeerRole = "initiator" | "joiner";
 
 export interface ConnectionStats {
@@ -29,71 +25,123 @@ export class WebRTCConnection {
   private pc: RTCPeerConnection;
   private signaling: SignalingClient;
   private roomId: string;
-  private role: PeerRole;
   private dataChannel: RTCDataChannel | null = null;
   private statsInterval: ReturnType<typeof setInterval> | null = null;
   private lastBytesReceived = 0;
   private lastBytesSent = 0;
   private lastStatsTime = 0;
 
-  // ICE candidates can arrive before the offer/answer round-trip has finished
-  // (they're gathered and trickled in asynchronously). Applying a candidate
-  // before setRemoteDescription() has resolved throws, so early candidates are
-  // queued here and flushed once the remote description is set.
+  // ICE candidates can arrive before offer/answer round-trip completes.
+  // Queued here and flushed once remote description is set.
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private remoteDescriptionSet = false;
 
   private callbacks: WebRTCConnectionCallbacks;
 
-  static async create(
-    signaling: SignalingClient,
-    roomId: string,
-    role: PeerRole,
-    callbacks: WebRTCConnectionCallbacks = {}
-  ): Promise<WebRTCConnection> {
-    // Start with multiple STUN servers for redundancy.
-    let iceServers: RTCIceServer[] = [
+  // Stored so close() can remove it from the SignalingClient — prevents stale
+  // handlers accumulating across reconnections.
+  private boundSignalingHandler: (message: ServerMessage) => void;
+
+  // ---------------------------------------------------------------------------
+  // ICE server config
+  // ---------------------------------------------------------------------------
+
+  // Fetch STUN + TURN servers. Called fresh on every restart() so credentials
+  // are always up-to-date.
+  static async fetchIceServers(): Promise<RTCIceServer[]> {
+    const iceServers: RTCIceServer[] = [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun2.l.google.com:19302" },
     ];
     try {
-      const res = await fetch('/api/turn');
+      const res = await fetch("/api/turn");
       if (res.ok) {
         const { username, credential } = await res.json();
         if (username && credential) {
-          // Add all four openrelay.metered.ca endpoints so if one port is
-          // blocked by a firewall or the credential is expired on one, the
-          // browser automatically tries the next candidate.
+          // All four openrelay.metered.ca endpoints — if one port is blocked by a
+          // firewall or the credential is rate-limited on one URL, the browser
+          // automatically tries the next candidate.
           iceServers.push(
-            { urls: "turn:openrelay.metered.ca:80",   username, credential },
-            { urls: "turn:openrelay.metered.ca:80?transport=tcp", username, credential },
-            { urls: "turn:openrelay.metered.ca:443",  username, credential },
+            { urls: "turn:openrelay.metered.ca:80",                username, credential },
+            { urls: "turn:openrelay.metered.ca:80?transport=tcp",  username, credential },
+            { urls: "turn:openrelay.metered.ca:443",               username, credential },
             { urls: "turn:openrelay.metered.ca:443?transport=tcp", username, credential },
-            { urls: "turn:openrelay.metered.ca:3478", username, credential },
+            { urls: "turn:openrelay.metered.ca:3478",              username, credential }
           );
         }
       }
     } catch (e) {
       console.error("[webrtc] Failed to fetch TURN credentials — proceeding with STUN only", e);
     }
-    return new WebRTCConnection(signaling, roomId, role, callbacks, iceServers);
+    return iceServers;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+
+  // Creates the connection object and registers the signaling message handler.
+  // Does NOT set up an RTCPeerConnection yet — call restart(shouldInitiate) when
+  // the server sends peer-joined to initialise the pc with the correct role.
+  // This is now synchronous so the handler is registered before joinRoom() fires.
+  static create(
+    signaling: SignalingClient,
+    roomId: string,
+    callbacks: WebRTCConnectionCallbacks = {}
+  ): WebRTCConnection {
+    return new WebRTCConnection(signaling, roomId, callbacks);
   }
 
   private constructor(
     signaling: SignalingClient,
     roomId: string,
-    role: PeerRole,
-    callbacks: WebRTCConnectionCallbacks = {},
-    iceServers: RTCIceServer[]
+    callbacks: WebRTCConnectionCallbacks = {}
   ) {
     this.signaling = signaling;
     this.roomId = roomId;
-    this.role = role;
     this.callbacks = callbacks;
 
-    this.pc = new RTCPeerConnection({ iceServers });
+    // Bare, unconfigured pc — minimal resources until restart() is called.
+    this.pc = new RTCPeerConnection({});
 
+    this.boundSignalingHandler = (message) => {
+      void this.handleSignalingMessage(message);
+    };
+    this.signaling.onMessage(this.boundSignalingHandler);
+  }
+
+  // (Re-)initialise the RTCPeerConnection with a fresh ICE config and correct role.
+  // Safe to call multiple times — tears down the previous pc cleanly each time.
+  // shouldInitiate comes from the server (peer-joined message) so the server,
+  // not the URL path, decides who creates the offer.
+  async restart(shouldInitiate: boolean): Promise<void> {
+    console.log("[webrtc] restart — shouldInitiate:", shouldInitiate);
+
+    // Tear down existing pc and data channel.
+    this.stopStatsPolling();
+    this.dataChannel?.close();
+    this.dataChannel = null;
+    this.pc.close();
+
+    // Reset negotiation state for the new session.
+    this.remoteDescriptionSet = false;
+    this.pendingCandidates = [];
+
+    // Build a fresh pc with up-to-date ICE credentials.
+    const iceServers = await WebRTCConnection.fetchIceServers();
+    this.pc = new RTCPeerConnection({ iceServers });
+    this.initPc(shouldInitiate);
+
+    // Initiator creates the offer immediately; responder waits for it.
+    if (shouldInitiate) {
+      await this.createAndSendOffer();
+    }
+  }
+
+  // Wire up all RTCPeerConnection event handlers and set up the data channel
+  // (created by initiator, received via ondatachannel by responder).
+  private initPc(shouldInitiate: boolean): void {
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
         this.signaling.sendIceCandidate(this.roomId, event.candidate.toJSON());
@@ -109,28 +157,33 @@ export class WebRTCConnection {
       console.log("[webrtc] iceConnectionState:", this.pc.iceConnectionState);
     };
 
-    if (this.role === "initiator") {
-      // The initiator creates the data channel BEFORE creating the offer, so
-      // it gets included in the SDP negotiation.
+    if (shouldInitiate) {
+      // Create the data channel BEFORE creating the offer so it's included in SDP.
       this.dataChannel = this.pc.createDataChannel("file-transfer");
       this.attachDataChannelHandlers(this.dataChannel);
     } else {
-      // The joiner receives the channel via this event instead of creating
-      // its own.
       this.pc.ondatachannel = (event) => {
         this.dataChannel = event.channel;
         this.attachDataChannelHandlers(this.dataChannel);
       };
     }
-
-    this.signaling.onMessage((message) => {
-      void this.handleSignalingMessage(message);
-    });
   }
 
+  close() {
+    this.stopStatsPolling();
+    this.dataChannel?.close();
+    this.pc.close();
+    // Remove our handler from the SignalingClient so stale callbacks don't fire
+    // after this connection is replaced by a new one.
+    this.signaling.offMessage(this.boundSignalingHandler);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Data channel
+  // ---------------------------------------------------------------------------
+
   private attachDataChannelHandlers(channel: RTCDataChannel) {
-    // Ensures binary chunks (Phase 3 file transfer) arrive as ArrayBuffer
-    // rather than Blob, which is consistent across browsers.
+    // Ensures binary chunks arrive as ArrayBuffer rather than Blob.
     channel.binaryType = "arraybuffer";
     channel.onopen = () => {
       console.log("[webrtc] data channel open");
@@ -146,8 +199,14 @@ export class WebRTCConnection {
     };
   }
 
-  // Phase 5a: poll RTCPeerConnection.getStats() every second to surface RTT,
-  // connection type (host/srflx/relay), and live throughput to the UI overlay.
+  getDataChannel() {
+    return this.dataChannel;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stats polling
+  // ---------------------------------------------------------------------------
+
   private startStatsPolling() {
     this.lastStatsTime = performance.now();
     this.statsInterval = setInterval(() => {
@@ -171,50 +230,48 @@ export class WebRTCConnection {
 
     stats.forEach((report) => {
       if (report.type === "candidate-pair" && report.state === "succeeded") {
-        // currentRoundTripTime is in seconds; convert to ms
         if (typeof report.currentRoundTripTime === "number") {
           rttMs = Math.round(report.currentRoundTripTime * 1000);
         }
-        // totalBytesSent/Received on the candidate pair gives transfer throughput
         if (typeof report.bytesReceived === "number") totalBytesReceived += report.bytesReceived;
-        if (typeof report.bytesSent === "number") totalBytesSent += report.bytesSent;
+        if (typeof report.bytesSent    === "number") totalBytesSent     += report.bytesSent;
       }
       if (report.type === "local-candidate" && report.id) {
-        // Match the local candidate of the selected pair to find the type
         stats.forEach((r) => {
           if (
             r.type === "candidate-pair" &&
             r.state === "succeeded" &&
             r.localCandidateId === report.id
           ) {
-            connectionType = report.candidateType ?? null; // "host", "srflx", or "relay"
+            connectionType = report.candidateType ?? null;
           }
         });
       }
     });
 
     const now = performance.now();
-    const deltaMs = now - this.lastStatsTime;
+    const deltaMs    = now - this.lastStatsTime;
     const deltaBytes =
       (totalBytesReceived - this.lastBytesReceived) +
-      (totalBytesSent - this.lastBytesSent);
+      (totalBytesSent     - this.lastBytesSent);
     const bytesPerSec = deltaMs > 0 ? Math.round((deltaBytes / deltaMs) * 1000) : 0;
 
     this.lastBytesReceived = totalBytesReceived;
-    this.lastBytesSent = totalBytesSent;
-    this.lastStatsTime = now;
+    this.lastBytesSent     = totalBytesSent;
+    this.lastStatsTime     = now;
 
     this.callbacks.onStatsUpdate?.({ rttMs, connectionType, bytesPerSec });
   }
 
+  // ---------------------------------------------------------------------------
+  // Signaling message handler
+  // ---------------------------------------------------------------------------
+
   private async handleSignalingMessage(message: ServerMessage) {
     switch (message.type) {
       case "peer-joined": {
-        // Only the initiator starts the offer -- once both sides have joined
-        // the room, it's safe to begin the SDP exchange.
-        if (this.role === "initiator") {
-          await this.createAndSendOffer();
-        }
+        // The room page ([id].tsx) handles peer-joined by calling restart(message.shouldInitiate).
+        // Nothing to do here — role assignment and pc creation happen in restart().
         break;
       }
 
@@ -269,15 +326,5 @@ export class WebRTCConnection {
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
     await this.signaling.sendOffer(this.roomId, offer);
-  }
-
-  getDataChannel() {
-    return this.dataChannel;
-  }
-
-  close() {
-    this.stopStatsPolling();
-    this.dataChannel?.close();
-    this.pc.close();
   }
 }

@@ -15,7 +15,7 @@
 //
 // Server -> Client
 //   { type: "room-created", roomId }
-//   { type: "peer-joined" }
+//   { type: "peer-joined", shouldInitiate: boolean }
 //   { type: "room-full" }
 //   { type: "offer", sdp }               // relayed
 //   { type: "answer", sdp }              // relayed
@@ -83,6 +83,12 @@ function removeSocketFromRooms(socket) {
 }
 
 wss.on("connection", (socket) => {
+  // Heartbeat: mark socket alive on every pong. The interval below terminates
+  // sockets that stop responding, surfacing "peer-left" within ~30 s instead
+  // of waiting for TCP keepalive (which can take minutes).
+  socket.isAlive = true;
+  socket.on("pong", () => { socket.isAlive = true; });
+
   console.log("[signaling] client connected");
 
   socket.on("message", (data) => {
@@ -123,9 +129,12 @@ wss.on("connection", (socket) => {
         socket.currentRoomId = roomId;
         console.log(`[signaling] socket joined room ${roomId}`);
 
-        for (const peerSocket of sockets) {
-          send(peerSocket, { type: "peer-joined" });
-        }
+        // The peer that was already waiting (index 0) becomes the offer initiator;
+        // the new arrival (index 1) is the responder. This is server-authoritative
+        // so the correct role is assigned even when the original creator rejoins
+        // via a room code (which would otherwise make both peers joiners).
+        send(sockets[0], { type: "peer-joined", shouldInitiate: true });
+        send(sockets[1], { type: "peer-joined", shouldInitiate: false });
         break;
       }
 
@@ -159,4 +168,21 @@ wss.on("connection", (socket) => {
   });
 });
 
-console.log(`[signaling] WebSocket server listening on ws://localhost:${PORT}`);
+console.log(`[signaling] WebSocket server listening on ws://0.0.0.0:${PORT}`);
+
+// Ping every 30 s. Any socket that hasn't replied with a pong since the last
+// cycle is considered dead — terminate it and notify remaining room peers.
+const heartbeatInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      console.log("[signaling] terminating dead socket (no pong received)");
+      removeSocketFromRooms(ws);
+      ws.terminate();
+      return;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30_000);
+
+wss.on("close", () => clearInterval(heartbeatInterval));

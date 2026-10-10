@@ -50,6 +50,9 @@ export default function Room() {
   const senderRef = useRef<FileSender | null>(null);
   const initializedRef = useRef(false);
   const speedSampleRef = useRef<{ time: number; bytes: number } | null>(null);
+  // Tracks the active room ID in a ref so cleanup and beforeunload handlers
+  // can read it synchronously without relying on stale closure state.
+  const roomIdRef = useRef<string | null>(null);
 
   const addLog = (category: LogCategory, type: LogType, message: string) => {
     setLogs((prev) => [...prev, { id: Math.random().toString(36).slice(2), category, type, message }]);
@@ -125,26 +128,26 @@ export default function Room() {
     signaling.onMessage((message) => {
       switch (message.type) {
         case "room-created":
+          roomIdRef.current = message.roomId;
           setRoomId(message.roomId);
           setRole("initiator");
           addLog('system', 'waiting', `$ room ${message.roomId} ready — waiting for peer`);
           router.replace(`/room/${message.roomId}`, undefined, { shallow: true });
-
-          (async () => {
-            connectionRef.current = await WebRTCConnection.create(
-              signaling,
-              message.roomId,
-              "initiator",
-              {
-                onDataChannelOpen: setupChannel,
-                onConnectionStateChange: (state) => addLog('connection', 'system', `$ connection: ${state}`),
-                onStatsUpdate: (s) => setStats(s),
-              }
-            );
-          })();
+          // Synchronous create — handler is registered immediately so peer-joined
+          // is never missed. The RTCPeerConnection is set up inside restart()
+          // when the server sends peer-joined with shouldInitiate.
+          connectionRef.current = WebRTCConnection.create(signaling, message.roomId, {
+            onDataChannelOpen: setupChannel,
+            onConnectionStateChange: (state) => addLog('connection', 'system', `$ connection: ${state}`),
+            onStatsUpdate: (s) => setStats(s),
+          });
           break;
         case "peer-joined":
           addLog('connection', 'system', "$ peer joined — negotiating connection...");
+          // restart() tears down any stale RTCPeerConnection and creates a fresh
+          // one with the role the server assigned. Fixes the deadlock where both
+          // peers end up as joiners when the original creator rejoins via room code.
+          void connectionRef.current?.restart(message.shouldInitiate);
           break;
         case "peer-left":
           addLog('connection', 'system', "$ peer left the room");
@@ -159,29 +162,42 @@ export default function Room() {
       }
     });
 
+    // Notify the server when the tab closes so the remaining peer sees
+    // "peer left" immediately instead of waiting for the heartbeat cycle.
+    const handleBeforeUnload = () => {
+      if (roomIdRef.current) signaling.leaveRoomSync(roomIdRef.current);
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     if (initialId === "new") {
       signaling.createRoom();
     } else {
+      roomIdRef.current = initialId;
       setRoomId(initialId);
       setRole("joiner");
       addLog('system', 'waiting', `$ joining room ${initialId}...`);
+      // Create the handler BEFORE sending join-room so no signaling messages
+      // (offer, ice-candidate) are missed due to the async TURN fetch.
+      connectionRef.current = WebRTCConnection.create(signaling, initialId, {
+        onDataChannelOpen: setupChannel,
+        onConnectionStateChange: (state) => addLog('connection', 'system', `$ connection: ${state}`),
+        onStatsUpdate: (s) => setStats(s),
+      });
       signaling.joinRoom(initialId);
-      (async () => {
-        connectionRef.current = await WebRTCConnection.create(signaling, initialId, "joiner", {
-          onDataChannelOpen: setupChannel,
-          onConnectionStateChange: (state) => addLog('connection', 'system', `$ connection: ${state}`),
-          onStatsUpdate: (s) => setStats(s),
-        });
-      })();
     }
 
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       // NOTE: Do NOT reset initializedRef.current here.
       // Resetting it caused React Strict Mode's intentional remount to re-run
       // the entire initialization, creating a second WebSocket + room code.
       // The ref is intentionally left true so any remount is a no-op.
       // On genuine navigation away, the component unmounts entirely and a fresh
       // instance starts with initializedRef.current = false from useRef(false).
+      //
+      // Send an explicit leave-room before the socket closes so the server
+      // notifies the remaining peer immediately (not after TCP keepalive timeout).
+      if (roomIdRef.current) signaling.leaveRoomSync(roomIdRef.current);
       connectionRef.current?.close();
       signaling.close();
     };
